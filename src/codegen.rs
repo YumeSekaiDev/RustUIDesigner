@@ -25,8 +25,11 @@ pub fn generate_main_rs(doc: &FormDocument) -> String {
     if opacity < 0.999 {
         lines.push("            .with_transparent(true)".to_owned());
     }
-    if doc.client_area_only {
+    if doc.client_area_only || doc.custom_caption_buttons {
         lines.push("            .with_decorations(false)".to_owned());
+    }
+    if doc.client_area_only && doc.corner_radius > 0 {
+        lines.push("            .with_transparent(true)".to_owned());
     }
     // Ensure the last builder call is followed by a comma in NativeOptions.
     let last = lines.len() - 1;
@@ -149,8 +152,13 @@ pub fn generate_app_rs(doc: &FormDocument) -> String {
     out.push_str("        }\n    }\n}\n\n");
 
     out.push_str("impl eframe::App for DesignedApp {\n");
+    let clear_expr = if doc.client_area_only && doc.corner_radius > 0 {
+        "[0.0, 0.0, 0.0, 0.0] // transparent: lets the rounded corners show through".to_owned()
+    } else {
+        clear
+    };
     out.push_str(&format!(
-        "    fn clear_color(&self, _visuals: &egui::Visuals) -> [f32; 4] {{\n        let _ = self.form_opacity;\n        {clear}\n    }}\n\n"
+        "    fn clear_color(&self, _visuals: &egui::Visuals) -> [f32; 4] {{\n        let _ = self.form_opacity;\n        {clear_expr}\n    }}\n\n"
     ));
 
     out.push_str("    fn update(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {\n");
@@ -178,18 +186,60 @@ pub fn generate_app_rs(doc: &FormDocument) -> String {
         ));
     }
     out.push_str("        egui::CentralPanel::default()\n");
-    out.push_str("            .frame(egui::Frame::none().fill(");
-    out.push_str(&back);
-    out.push_str("))\n");
+    if doc.client_area_only && doc.corner_radius > 0 {
+        out.push_str(&format!(
+            "            .frame(egui::Frame::none().fill({back}).corner_radius(egui::CornerRadius::same({})))\n",
+            doc.corner_radius
+        ));
+    } else {
+        out.push_str("            .frame(egui::Frame::none().fill(");
+        out.push_str(&back);
+        out.push_str("))\n");
+    }
     out.push_str("            .show(ctx, |ui| {\n");
     out.push_str(&format!(
         "                ui.set_min_size(egui::vec2({:.1}, {:.1}));\n",
         doc.width as f32, doc.height as f32
     ));
     out.push_str("                let origin = ui.min_rect().min;\n\n");
+    if doc.custom_caption_buttons {
+        let mut cap = String::new();
+        cap.push_str("                // Custom window buttons (replace the default window decorations).\n");
+        cap.push_str("                {\n");
+        cap.push_str(
+            "                    let strip = egui::Rect::from_min_size(egui::pos2(ui.max_rect().right() - 104.0, ui.max_rect().top() + 6.0), egui::vec2(98.0, 24.0));\n",
+        );
+        cap.push_str("                    ui.allocate_ui_at_rect(strip, |ui| {\n");
+        cap.push_str("                        ui.horizontal(|ui| {\n");
+        {
+            let pal = doc.theme.palette();
+            let fill = color_expr_with_opacity(pal.button_back, opacity);
+            let fore = color_expr_with_opacity(pal.button_fore, opacity);
+            let radius = pal.button_radius;
+            cap.push_str("                            let maxed = ctx.input(|i| i.viewport().maximized.unwrap_or(false));\n");
+            if doc.minimize_box {
+                cap.push_str(&format!(
+                    "                            if ui.add(egui::Button::new(egui::RichText::new(\"─\").color({fore})).fill({fill}).corner_radius(egui::CornerRadius::same({radius})).min_size(egui::vec2(30.0, 22.0))).clicked() {{ ctx.send_viewport_cmd(egui::ViewportCommand::Minimized(true)); }}\n"
+                ));
+            }
+            if doc.maximize_box {
+                cap.push_str(&format!(
+                    "                            if ui.add(egui::Button::new(egui::RichText::new(if maxed {{ \"❐\" }} else {{ \"▢\" }}).color({fore})).fill({fill}).corner_radius(egui::CornerRadius::same({radius})).min_size(egui::vec2(30.0, 22.0))).clicked() {{ ctx.send_viewport_cmd(egui::ViewportCommand::Maximized(!maxed)); }}\n"
+                ));
+            }
+            cap.push_str(&format!(
+                "                            if ui.add(egui::Button::new(egui::RichText::new(\"✕\").color(egui::Color32::WHITE)).fill(egui::Color32::from_rgb(198, 48, 49)).corner_radius(egui::CornerRadius::same({radius})).min_size(egui::vec2(30.0, 22.0))).clicked() {{ ctx.send_viewport_cmd(egui::ViewportCommand::Close); }}\n"
+            ));
+        }
+        cap.push_str("                        });\n");
+        cap.push_str("                    });\n");
+        cap.push_str("                }\n\n");
+        out.push_str(&cap);
+    }
 
     for ctrl in &doc.controls {
-        out.push_str(&emit_control_ui(ctrl, opacity, doc.theme.palette().button_radius, doc.theme.palette().bold_buttons, doc.theme.palette().uppercase_buttons));
+        let pal = doc.theme.palette();
+        out.push_str(&emit_control_ui(ctrl, opacity, pal.button_radius, pal.bold_buttons, pal.uppercase_buttons, ctrl.hover_effect, ctrl.back_color));
         out.push('\n');
     }
 
@@ -199,7 +249,7 @@ pub fn generate_app_rs(doc: &FormDocument) -> String {
     out
 }
 
-fn emit_control_ui(ctrl: &Control, form_opacity: f32, button_radius: u8, bold_buttons: bool, uppercase_buttons: bool) -> String {
+fn emit_control_ui(ctrl: &Control, form_opacity: f32, button_radius: u8, bold_buttons: bool, uppercase_buttons: bool, hover_effect: crate::model::HoverEffect, back_color: RgbaColor) -> String {
     let x = ctrl.rect.x as f32;
     let y = ctrl.rect.y as f32;
     let w = ctrl.rect.width as f32;
@@ -237,7 +287,7 @@ fn emit_control_ui(ctrl: &Control, form_opacity: f32, button_radius: u8, bold_bu
             let shown = escape_rust_string(&shown);
             let strong = if bold_buttons { ".strong()" } else { "" };
             body.push_str(&format!(
-                "                        let btn = egui::Button::new(egui::RichText::new(\"{shown}\"){strong}.color({fore})).fill({back}).corner_radius(egui::CornerRadius::same({}));\n",
+                "                        let btn = egui::Button::new(egui::RichText::new(\"{shown}\"){strong}.color({fore})).fill({back}).corner_radius(egui::CornerRadius::same({})).min_size(egui::vec2({w:.1}, {h:.1}));\n",
                 button_radius
             ));
             body.push_str(&format!(
@@ -251,6 +301,7 @@ fn emit_control_ui(ctrl: &Control, form_opacity: f32, button_radius: u8, bold_bu
                 format!("egui::TextEdit::singleline(&mut self.{field})")
             };
             edit.push_str(&format!(".text_color({fore})"));
+            edit.push_str(&format!(".background_color({back})"));
             if ctrl.password_char.is_some() {
                 edit.push_str(".password(true)");
             }
@@ -295,6 +346,25 @@ fn emit_control_ui(ctrl: &Control, form_opacity: f32, button_radius: u8, bold_bu
         ControlKind::Timer => unreachable!("timer handled above"),
     }
 
+    let hover_code = match hover_effect {
+        crate::model::HoverEffect::None => String::new(),
+        crate::model::HoverEffect::Bubbly => format!(
+            "                    // Bubbly hover: breathing outline while hovered.\n                    if ui.ctx().pointer_hover_pos().is_some_and(|pos| rect.contains(pos)) {{\n                        let pulse = ((ui.ctx().input(|i| i.time) * 4.0).sin() * 0.5 + 0.5) as f32;\n                        ui.painter().rect_stroke(rect.expand(2.0 + pulse * 3.0), egui::CornerRadius::same({button_radius}), egui::Stroke::new(1.5_f32, {pulse_color}), egui::StrokeKind::Outside);\n                        ui.ctx().request_repaint();\n                    }}\n",
+            pulse_color = color_expr_with_opacity(back_color, form_opacity),
+        ),
+        crate::model::HoverEffect::Glow => format!(
+            "                    // Glow hover: soft layered halo while hovered.\n                    if ui.ctx().pointer_hover_pos().is_some_and(|pos| rect.contains(pos)) {{\n                        let pulse = ((ui.ctx().input(|i| i.time) * 4.0).sin() * 0.5 + 0.5) as f32;\n                        for layer in (1..=3).rev() {{\n                            let alpha = ((30 - layer * 7) as f32 * (0.65 + 0.35 * pulse)) as u8;\n                            ui.painter().rect_filled(rect.expand(layer as f32 * 3.0), egui::CornerRadius::same({button_radius}), egui::Color32::from_rgba_unmultiplied({}, {}, {}, alpha));\n                        }}\n                        ui.painter().rect_stroke(rect.expand(1.5), egui::CornerRadius::same({button_radius}), egui::Stroke::new(1.5_f32, egui::Color32::from_rgba_unmultiplied({}, {}, {}, 140)), egui::StrokeKind::Outside);\n                        ui.ctx().request_repaint();\n                    }}\n",
+            back_color.r, back_color.g, back_color.b, back_color.r, back_color.g, back_color.b,
+        ),
+        crate::model::HoverEffect::Ripple => format!(
+            "                    // Ripple hover: sonar rings expand and fade.\n                    if ui.ctx().pointer_hover_pos().is_some_and(|pos| rect.contains(pos)) {{\n                        for ring in 0..2 {{\n                            let phase = ((ui.ctx().input(|i| i.time) * 0.9 + ring as f64 * 0.5).fract()) as f32;\n                            let alpha = ((1.0 - phase) * 160.0) as u8;\n                            ui.painter().rect_stroke(rect.expand(2.0 + phase * 14.0), egui::CornerRadius::same({button_radius}), egui::Stroke::new(2.0_f32, egui::Color32::from_rgba_unmultiplied({}, {}, {}, alpha)), egui::StrokeKind::Outside);\n                        }}\n                        ui.ctx().request_repaint();\n                    }}\n",
+            back_color.r, back_color.g, back_color.b,
+        ),
+        crate::model::HoverEffect::Lift => format!(
+            "                    // Lift hover: growing drop shadow, control appears to rise.\n                    if ui.ctx().pointer_hover_pos().is_some_and(|pos| rect.contains(pos)) {{\n                        let pulse = ((ui.ctx().input(|i| i.time) * 4.0).sin() * 0.5 + 0.5) as f32;\n                        let lift = 2.0 + pulse * 5.0;\n                        for layer in (1..=3).rev() {{\n                            let grow = layer as f32 * 2.0;\n                            ui.painter().rect_filled(rect.expand(grow).translate(egui::vec2(0.0, lift + grow * 0.5)), egui::CornerRadius::same({button_radius}), egui::Color32::from_rgba_unmultiplied(0, 0, 0, (26 - layer * 6) as u8));\n                        }}\n                        ui.painter().rect_stroke(rect.expand(1.0), egui::CornerRadius::same({button_radius}), egui::Stroke::new(1.5_f32, egui::Color32::from_rgba_unmultiplied(255, 255, 255, 90 + (pulse * 60.0) as u8)), egui::StrokeKind::Outside);\n                        ui.ctx().request_repaint();\n                    }}\n",
+        ),
+    };
+
     format!(
         r#"                // {} ({:?}) @ ({}, {}) {}×{} enabled={} font={} {font_size}pt
                 {{
@@ -304,7 +374,7 @@ fn emit_control_ui(ctrl: &Control, form_opacity: f32, button_radius: u8, bold_bu
                     );
                     ui.allocate_ui_at_rect(rect, |ui| {{
 {body}                    }});
-                }}
+{hover_code}                }}
 "#,
         ctrl.name,
         ctrl.kind,
@@ -401,6 +471,24 @@ mod tests {
 }
 
 #[cfg(test)]
+mod sizing_tests {
+    use super::*;
+    use crate::model::{ControlKind, FormDocument};
+
+    #[test]
+    fn button_fills_rect_and_textbox_uses_its_back_color() {
+        let mut doc = FormDocument::new_blank();
+        doc.add_control(ControlKind::Button, 10.0, 10.0);
+        doc.selected_control_mut().unwrap().rect.width = 220;
+        doc.selected_control_mut().unwrap().rect.height = 64;
+        doc.add_control(ControlKind::TextBox, 10.0, 90.0);
+        let app = generate_app_rs(&doc);
+        assert!(app.contains(".min_size(egui::vec2(220.0, 64.0))"), "button gets its designed size: {app}");
+        assert!(app.contains(".background_color(egui::Color32::from_rgba_unmultiplied(255, 255, 255"), "textbox paints its (white) back color: {app}");
+    }
+}
+
+#[cfg(test)]
 mod theme_tests {
     use super::*;
     use crate::model::{ControlKind, FormDocument, FormTheme};
@@ -424,5 +512,66 @@ mod theme_tests {
         assert!(app.contains("style.spacing.button_padding = egui::vec2(16.0, 8.0)"));
         assert!(app.contains("style.animation_time = 0.35"));
         assert!(app.contains(".strong()"), "Fun buttons are bold");
+        // Bubbly hover pulse must be emitted, not just style.animation_time.
+        assert!(app.contains("rect.expand(2.0 + pulse * 3.0)"), "bubbly outline in app.rs");
+        assert!(app.contains("ui.ctx().request_repaint();"), "pulse drives repaint in app.rs");
     }
 }
+
+
+#[cfg(test)]
+mod hover_effect_codegen_tests {
+    use super::*;
+    use crate::model::{ControlKind, FormDocument, HoverEffect};
+
+    #[test]
+    fn generated_hover_effect_is_per_control() {
+        let mut doc = FormDocument::new_blank();
+        doc.add_control(ControlKind::Button, 10.0, 10.0); // Bubbly by default
+        doc.add_control(ControlKind::Slider, 10.0, 60.0); // None by default
+        doc.selected_control_mut().unwrap().hover_effect = HoverEffect::Glow;
+        let app = generate_app_rs(&doc);
+        assert!(app.contains("Bubbly hover"), "button keeps bubbly: {app}");
+        assert!(app.contains("Glow hover"), "slider opted into glow: {app}");
+        doc.controls[1].hover_effect = HoverEffect::Ripple;
+        let app = generate_app_rs(&doc);
+        assert!(app.contains("Ripple hover"), "ripple emitted: {app}");
+        doc.controls[1].hover_effect = HoverEffect::Lift;
+        let app = generate_app_rs(&doc);
+        assert!(app.contains("Lift hover"), "lift emitted: {app}");
+        // Turning a button's effect off removes its animation entirely.
+        doc.controls[0].hover_effect = HoverEffect::None;
+        let app = generate_app_rs(&doc);
+        assert!(!app.contains("Bubbly hover"), "disabled button has no bubbly: {app}");
+    }
+}
+
+#[cfg(test)]
+mod caption_tests {
+    use super::*;
+    use crate::model::FormDocument;
+
+    #[test]
+    fn custom_caption_buttons_and_rounded_corners_are_generated() {
+        let mut doc = FormDocument::new_blank();
+        doc.client_area_only = true;
+        doc.corner_radius = 18;
+        doc.custom_caption_buttons = true;
+        let main = generate_main_rs(&doc);
+        assert!(main.contains(".with_decorations(false)"), "{main}");
+        assert!(main.contains(".with_transparent(true)"), "{main}");
+        let app = generate_app_rs(&doc);
+        assert!(app.contains("CornerRadius::same(18)"), "{app}");
+        assert!(app.contains("ViewportCommand::Minimized(true)"), "{app}");
+        assert!(app.contains("ViewportCommand::Maximized(!maxed)"), "{app}");
+        assert!(app.contains("ViewportCommand::Close"), "{app}");
+        assert!(app.contains("ui.max_rect().right() - 104.0"), "caption buttons anchor to window edge: {app}");
+        assert!(app.contains("from_rgb(198, 48, 49)"), "close button is themed red: {app}");
+        assert!(app.contains("if maxed"), "maximize button shows restore glyph: {app}");
+        assert!(app.contains("[0.0, 0.0, 0.0, 0.0]"), "transparent clear lets rounded corners show: {app}");
+        // Off by default: nothing emitted.
+        let plain = generate_app_rs(&FormDocument::new_blank());
+        assert!(!plain.contains("Custom window buttons"), "{plain}");
+    }
+}
+

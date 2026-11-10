@@ -106,11 +106,22 @@ pub fn show(
         title_font,
         Color32::WHITE,
     );
-    paint_caption_buttons(&form_painter, title_rect, doc.minimize_box, doc.maximize_box);
+    paint_caption_buttons(&form_painter, title_rect, doc.minimize_box, doc.maximize_box, doc.theme);
     }
 
-    // Client background.
-    form_painter.rect_filled(client_rect, CornerRadius::ZERO, doc.back_color.to_egui());
+    // Client background (rounded when borderless with a corner radius).
+    let form_radius = if doc.client_area_only { doc.corner_radius } else { 0 };
+    form_painter.rect_filled(client_rect, CornerRadius::same(form_radius), doc.back_color.to_egui());
+
+    // Custom caption buttons floating at the top-right of the client area,
+    // replacing the default window buttons on borderless forms.
+    if doc.client_area_only && doc.custom_caption_buttons {
+        let strip = Rect::from_min_max(
+            Pos2::new(client_rect.right() - 84.0, client_rect.top()),
+            Pos2::new(client_rect.right(), client_rect.top() + TITLE_BAR_H),
+        );
+        paint_caption_buttons(&form_painter, strip, doc.minimize_box, doc.maximize_box, doc.theme);
+    }
 
     // Border style.
     paint_form_border(&form_painter, form_outer, doc.border_style);
@@ -262,24 +273,80 @@ pub fn show(
         paint_control(&form_painter, ctrl, client_rect, selected, doc.theme);
     }
 
-    // Soft hover pulse for animated themes (Cute/Fun/Sunny…): a breathing
-    // outline around the control under the pointer.
-    let anim = doc.theme.palette().animation_secs;
-    if anim > 0.12 {
-        if let (Some(pf), true) = (pointer_form, over_client) {
-            if let Some(id) = doc.hit_test(pf.x, pf.y) {
-                if let Some(ctrl) = doc.controls.iter().find(|c| c.id == id) {
-                    let r = form_to_screen_rect(ctrl.rect, client_rect);
-                    let time = ui.ctx().input(|i| i.time);
-                    let pulse = ((time * 4.0).sin() * 0.5 + 0.5) as f32;
-                    let grow = 2.0 + pulse * 3.0;
-                    form_painter.rect_stroke(
-                        r.expand(grow),
-                        CornerRadius::same(doc.theme.palette().button_radius),
-                        Stroke::new(1.5, doc.theme.palette().button_back.to_egui()),
-                        StrokeKind::Outside,
-                    );
-                    ui.ctx().request_repaint();
+    // Per-control hover effect (Properties -> "Hover effect"): Bubbly is a
+    // breathing outline, Glow is a soft layered halo. None = no animation.
+    if let (Some(pf), true) = (pointer_form, over_client) {
+        if let Some(id) = doc.hit_test(pf.x, pf.y) {
+            if let Some(ctrl) = doc.controls.iter().find(|c| c.id == id) {
+                let r = form_to_screen_rect(ctrl.rect, client_rect);
+                let time = ui.ctx().input(|i| i.time);
+                let pulse = ((time * 4.0).sin() * 0.5 + 0.5) as f32;
+                let radius = CornerRadius::same(doc.theme.palette().button_radius);
+                match ctrl.hover_effect {
+                    crate::model::HoverEffect::None => {}
+                    crate::model::HoverEffect::Bubbly => {
+                        form_painter.rect_stroke(
+                            r.expand(2.0 + pulse * 3.0),
+                            radius,
+                            Stroke::new(1.5, doc.theme.palette().button_back.to_egui()),
+                            StrokeKind::Outside,
+                        );
+                        ui.ctx().request_repaint();
+                    }
+                    crate::model::HoverEffect::Glow => {
+                        let base = ctrl.back_color.to_egui();
+                        for layer in (1..=3).rev() {
+                            let grow = layer as f32 * 3.0;
+                            let alpha = ((30 - layer * 7) as f32 * (0.65 + 0.35 * pulse)) as u8;
+                            form_painter.rect_filled(
+                                r.expand(grow),
+                                radius,
+                                Color32::from_rgba_unmultiplied(base.r(), base.g(), base.b(), alpha),
+                            );
+                        }
+                        form_painter.rect_stroke(
+                            r.expand(1.5),
+                            radius,
+                            Stroke::new(1.5, Color32::from_rgba_unmultiplied(base.r(), base.g(), base.b(), 140)),
+                            StrokeKind::Outside,
+                        );
+                        ui.ctx().request_repaint();
+                    }
+                    crate::model::HoverEffect::Ripple => {
+                        // Two sonar rings, half a cycle apart, expanding and fading.
+                        let base = doc.theme.palette().button_back.to_egui();
+                        for ring in 0..2 {
+                            let phase = ((time * 0.9 + ring as f64 * 0.5).fract()) as f32;
+                            let alpha = ((1.0 - phase) * 160.0) as u8;
+                            form_painter.rect_stroke(
+                                r.expand(2.0 + phase * 14.0),
+                                radius,
+                                Stroke::new(2.0, Color32::from_rgba_unmultiplied(base.r(), base.g(), base.b(), alpha)),
+                                StrokeKind::Outside,
+                            );
+                        }
+                        ui.ctx().request_repaint();
+                    }
+                    crate::model::HoverEffect::Lift => {
+                        // Growing offset shadow below + bright top rim: the control "lifts".
+                        let lift = 2.0 + pulse * 5.0;
+                        for layer in (1..=3).rev() {
+                            let grow = layer as f32 * 2.0;
+                            let alpha = 26 - layer * 6;
+                            form_painter.rect_filled(
+                                r.expand(grow).translate(egui::vec2(0.0, lift + grow * 0.5)),
+                                radius,
+                                Color32::from_rgba_unmultiplied(0, 0, 0, alpha as u8),
+                            );
+                        }
+                        form_painter.rect_stroke(
+                            r.expand(1.0),
+                            radius,
+                            Stroke::new(1.5, Color32::from_rgba_unmultiplied(255, 255, 255, 90 + (pulse * 60.0) as u8)),
+                            StrokeKind::Outside,
+                        );
+                        ui.ctx().request_repaint();
+                    }
                 }
             }
         }
@@ -312,7 +379,11 @@ pub fn show(
     }
 }
 
-fn paint_caption_buttons(painter: &egui::Painter, title: Rect, minimize: bool, maximize: bool) {
+fn paint_caption_buttons(painter: &egui::Painter, title: Rect, minimize: bool, maximize: bool, theme: crate::model::FormTheme) {
+    let pal = theme.palette();
+    let fill = pal.button_back.to_egui();
+    let fore = pal.button_fore.to_egui();
+    let pill = CornerRadius::same(pal.button_radius.min(7));
     let btn_w = 16.0;
     let btn_h = 14.0;
     let gap = 4.0;
@@ -323,12 +394,7 @@ fn paint_caption_buttons(painter: &egui::Painter, title: Rect, minimize: bool, m
         Pos2::new(right - btn_w * 0.5, title.center().y),
         Vec2::new(btn_w, btn_h),
     );
-    painter.rect_stroke(
-        close,
-        CornerRadius::same(1),
-        Stroke::new(1.0, Color32::from_white_alpha(180)),
-        StrokeKind::Inside,
-    );
+    painter.rect_filled(close, pill, Color32::from_rgb(198, 48, 49));
     painter.line_segment(
         [close.min + Vec2::splat(4.0), close.max - Vec2::splat(4.0)],
         Stroke::new(1.0, Color32::WHITE),
@@ -347,10 +413,11 @@ fn paint_caption_buttons(painter: &egui::Painter, title: Rect, minimize: bool, m
             Pos2::new(right - btn_w * 0.5, title.center().y),
             Vec2::new(btn_w, btn_h),
         );
+        painter.rect_filled(r, pill, fill);
         painter.rect_stroke(
-            r.shrink2(Vec2::new(4.0, 3.0)),
+            r.shrink2(Vec2::new(5.0, 4.0)),
             CornerRadius::ZERO,
-            Stroke::new(1.0, Color32::WHITE),
+            Stroke::new(1.0, fore),
             StrokeKind::Inside,
         );
         right -= btn_w + gap;
@@ -361,10 +428,11 @@ fn paint_caption_buttons(painter: &egui::Painter, title: Rect, minimize: bool, m
             Pos2::new(right - btn_w * 0.5, title.center().y),
             Vec2::new(btn_w, btn_h),
         );
+        painter.rect_filled(r, pill, fill);
         painter.hline(
             (r.left() + 4.0)..=(r.right() - 4.0),
             r.center().y + 2.0,
-            Stroke::new(1.5, Color32::WHITE),
+            Stroke::new(1.5, fore),
         );
     }
 }

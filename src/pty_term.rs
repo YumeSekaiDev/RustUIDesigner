@@ -50,6 +50,11 @@ impl Default for PtyTerminal {
     }
 }
 
+/// Single-quote a path for POSIX shells (bash/zsh/fish all accept this).
+pub fn shell_quote(path: &Path) -> String {
+    format!("'{}'", path.display().to_string().replace('\'', "'\\''"))
+}
+
 fn make_parser(rows: u16, cols: u16) -> vt100::Parser {
     let rows = NonZeroU16::new(rows.max(2)).unwrap();
     let cols = NonZeroU16::new(cols.max(2)).unwrap();
@@ -135,6 +140,13 @@ impl PtyTerminal {
             alive_flag.store(false, Ordering::SeqCst);
         });
 
+        // The PTY line discipline buffers this until the shell is ready to
+        // read, so it lands after any rc file runs: the prompt always starts
+        // in the project folder and `cargo run` works immediately.
+        let mut writer = writer;
+        let _ = writer.write_all(format!("cd -- {}\r", shell_quote(folder)).as_bytes());
+        let _ = writer.flush();
+
         self.parser = make_parser(self.rows, self.cols);
         self.pty = Some(PtyHandles {
             writer,
@@ -153,6 +165,16 @@ impl PtyTerminal {
         self.pty = None;
         self.rx = None;
         self.cwd = None;
+    }
+
+    /// Type a command line into the shell as if the user typed it.
+    pub fn send_line(&mut self, line: &str) {
+        self.write_bytes(format!("{line}\r").as_bytes());
+    }
+
+    /// Jump the running shell back to the project folder.
+    pub fn cd_to_project(&mut self, folder: &Path) {
+        self.send_line(&format!("cd -- {}", shell_quote(folder)));
     }
 
     fn write_bytes(&mut self, bytes: &[u8]) {
@@ -217,6 +239,42 @@ impl PtyTerminal {
             {
                 if let Some(dir) = folder {
                     let _ = self.start(dir);
+                }
+            }
+            if ui
+                .add_enabled(
+                    folder.is_some_and(|p| p.is_dir()),
+                    egui::Button::new("📁 Project folder"),
+                )
+                .on_hover_text("cd back to the open project folder")
+                .clicked()
+            {
+                if let Some(dir) = folder {
+                    self.cd_to_project(dir);
+                }
+            }
+            if ui
+                .add_enabled(
+                    folder.is_some_and(|p| p.is_dir()),
+                    egui::Button::new("▶ cargo run"),
+                )
+                .clicked()
+            {
+                if let Some(dir) = folder {
+                    self.cd_to_project(dir);
+                    self.send_line("cargo run");
+                }
+            }
+            if ui
+                .add_enabled(
+                    folder.is_some_and(|p| p.is_dir()),
+                    egui::Button::new("🔨 cargo build"),
+                )
+                .clicked()
+            {
+                if let Some(dir) = folder {
+                    self.cd_to_project(dir);
+                    self.send_line("cargo build");
                 }
             }
             if ui
@@ -428,6 +486,95 @@ fn ansi_idx(i: u8) -> Color32 {
         14 => Color32::from_rgb(41, 184, 219),
         15 => Color32::from_rgb(255, 255, 255),
         _ => Color32::from_rgb(200, 200, 200),
+    }
+}
+
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn shell_quote_handles_spaces_and_quotes() {
+        assert_eq!(shell_quote(Path::new("/tmp/my proj")), "'/tmp/my proj'");
+        assert_eq!(shell_quote(Path::new("/tmp/it's")), "'/tmp/it'\\''s'");
+    }
+}
+
+#[cfg(test)]
+mod pty_integration_tests {
+    use super::*;
+
+    fn screen_text(term: &mut PtyTerminal) -> String {
+        term.drain_output();
+        let screen = term.parser.screen();
+        let (rows, cols) = screen.size();
+        let mut out = String::new();
+        for row in 0..rows.get() {
+            for col in 0..cols.get() {
+                if let Some(cell) = screen.cell(row, col) {
+                    out.push_str(cell.contents());
+                }
+            }
+            out.push('\n');
+        }
+        out
+    }
+
+    fn wait_for(term: &mut PtyTerminal, needle: &str, secs: u64) -> String {
+        let start = std::time::Instant::now();
+        loop {
+            let text = screen_text(term);
+            if text.contains(needle) || start.elapsed().as_secs() > secs {
+                return text;
+            }
+            std::thread::sleep(Duration::from_millis(50));
+        }
+    }
+
+    #[test]
+    fn pty_lands_in_project_folder_and_follows_switches() {
+        let base = std::env::temp_dir().join(format!("fd term test {}", std::process::id()));
+        let dir_a = base.join("proj a");
+        let dir_b = base.join("proj b");
+        std::fs::create_dir_all(&dir_a).unwrap();
+        std::fs::create_dir_all(&dir_b).unwrap();
+
+        let mut term = PtyTerminal::default();
+        // Start: auto-cd must land in a folder whose path contains spaces.
+        term.ensure_running(Some(&dir_a));
+        term.send_line("pwd");
+        let text = wait_for(&mut term, &dir_a.display().to_string(), 10);
+        assert!(text.contains(&dir_a.display().to_string()), "start pwd:\n{text}");
+
+        // Wander away, then the Project-folder jump returns.
+        term.send_line("cd /");
+        term.send_line("pwd");
+        let text = wait_for(&mut term, "\n/\n", 5);
+        term.cd_to_project(&dir_a);
+        term.send_line("pwd");
+        let text = wait_for(&mut term, &dir_a.display().to_string(), 5);
+        assert!(text.contains(&dir_a.display().to_string()), "cd back:\n{text}");
+
+        // Typed commands execute (what the cargo toolbar buttons send).
+        term.send_line("echo MARKER_$((40+2))");
+        let text = wait_for(&mut term, "MARKER_42", 5);
+        assert!(text.contains("MARKER_42"), "echo:\n{text}");
+
+        // Folder switch restarts the shell in the new folder.
+        term.ensure_running(Some(&dir_b));
+        term.send_line("pwd");
+        let text = wait_for(&mut term, &dir_b.display().to_string(), 10);
+        assert!(text.contains(&dir_b.display().to_string()), "switch pwd:\n{text}");
+
+        // Explicit restart also lands in the folder.
+        term.restart(&dir_a).unwrap();
+        term.send_line("pwd");
+        let text = wait_for(&mut term, &dir_a.display().to_string(), 10);
+        assert!(text.contains(&dir_a.display().to_string()), "restart pwd:\n{text}");
+
+        term.shutdown();
+        let _ = std::fs::remove_dir_all(&base);
     }
 }
 

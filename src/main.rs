@@ -17,6 +17,7 @@ mod theme;
 mod toolbox;
 
 use app::FormDesignerApp;
+use model::FormTheme;
 
 fn main() -> eframe::Result<()> {
     let options = eframe::NativeOptions {
@@ -31,7 +32,7 @@ fn main() -> eframe::Result<()> {
         "Form Designer",
         options,
         Box::new(|cc| {
-            theme::apply(&cc.egui_ctx);
+            theme::apply(&cc.egui_ctx, FormTheme::default());
             Ok(Box::new(FormDesignerApp::default()))
         }),
     )

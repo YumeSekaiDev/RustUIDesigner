@@ -1,8 +1,10 @@
-//! Modern visual theme for the Form Designer shell.
+//! Visual themes for the Form Designer and generated apps.
+// Each preset changes more than colors — shapes, spacing, fonts, and soft animations.
 
 use egui::{Color32, CornerRadius, FontFamily, FontId, Stroke, Style, Visuals};
+use crate::model::FormTheme;
 
-/// Accent used for selection, tabs, and primary actions.
+/* ---------- Color constants (used by UI helpers; theme take precedence via apply()) ---------- */
 pub const ACCENT: Color32 = Color32::from_rgb(99, 102, 241); // indigo
 pub const ACCENT_SOFT: Color32 = Color32::from_rgb(129, 140, 248);
 pub const ACCENT_DIM: Color32 = Color32::from_rgb(67, 56, 202);
@@ -17,8 +19,11 @@ pub const TEXT_MUTED: Color32 = Color32::from_rgb(148, 163, 184);
 pub const SUCCESS: Color32 = Color32::from_rgb(52, 211, 153);
 pub const DANGER: Color32 = Color32::from_rgb(248, 113, 113);
 
-/// Apply a modern dark theme to the egui context.
-pub fn apply(ctx: &egui::Context) {
+/// Apply the designer shell theme. This is always the dark shell palette:
+/// the per-form `FormTheme` colours the canvas and generated app only, so
+/// light form themes (Corporate/Cute/Sunny/...) never make shell text
+/// white-on-white in the Properties/Toolbox inputs.
+pub fn apply(ctx: &egui::Context, _theme: FormTheme) {
     let mut visuals = Visuals::dark();
     visuals.dark_mode = true;
     visuals.window_fill = BG_PANEL;
@@ -38,64 +43,40 @@ pub fn apply(ctx: &egui::Context) {
     visuals.widgets.noninteractive.bg_stroke = Stroke::new(1.0, BORDER);
     visuals.widgets.noninteractive.fg_stroke = Stroke::new(1.0, TEXT_MUTED);
     visuals.widgets.noninteractive.corner_radius = CornerRadius::same(6);
-
     visuals.widgets.inactive.bg_fill = BG_ELEVATED;
     visuals.widgets.inactive.weak_bg_fill = BG_ELEVATED;
     visuals.widgets.inactive.bg_stroke = Stroke::new(1.0, BORDER);
     visuals.widgets.inactive.fg_stroke = Stroke::new(1.0, TEXT);
     visuals.widgets.inactive.corner_radius = CornerRadius::same(8);
-
     visuals.widgets.hovered.bg_fill = BG_HOVER;
     visuals.widgets.hovered.weak_bg_fill = BG_HOVER;
     visuals.widgets.hovered.bg_stroke = Stroke::new(1.0, ACCENT_SOFT);
     visuals.widgets.hovered.fg_stroke = Stroke::new(1.0, Color32::WHITE);
     visuals.widgets.hovered.corner_radius = CornerRadius::same(8);
-
     visuals.widgets.active.bg_fill = ACCENT_DIM;
     visuals.widgets.active.weak_bg_fill = ACCENT;
     visuals.widgets.active.bg_stroke = Stroke::new(1.0, ACCENT_SOFT);
     visuals.widgets.active.fg_stroke = Stroke::new(1.0, Color32::WHITE);
     visuals.widgets.active.corner_radius = CornerRadius::same(8);
-
     visuals.widgets.open.bg_fill = BG_HOVER;
     visuals.widgets.open.bg_stroke = Stroke::new(1.0, ACCENT);
     visuals.widgets.open.fg_stroke = Stroke::new(1.0, TEXT);
     visuals.widgets.open.corner_radius = CornerRadius::same(8);
-
     visuals.selection.bg_fill = Color32::from_rgba_unmultiplied(99, 102, 241, 90);
     visuals.selection.stroke = Stroke::new(1.0, ACCENT_SOFT);
 
-    let mut style = Style {
-        visuals,
-        ..Style::default()
-    };
+    let mut style = Style { visuals, ..Style::default() };
     style.spacing.item_spacing = egui::vec2(8.0, 6.0);
     style.spacing.button_padding = egui::vec2(12.0, 6.0);
     style.spacing.window_margin = egui::Margin::same(12);
     style.spacing.menu_margin = egui::Margin::same(8);
     style.spacing.indent = 18.0;
     style.interaction.show_tooltips_only_when_still = true;
-
-    style.text_styles.insert(
-        egui::TextStyle::Heading,
-        FontId::new(18.0, FontFamily::Proportional),
-    );
-    style.text_styles.insert(
-        egui::TextStyle::Body,
-        FontId::new(13.5, FontFamily::Proportional),
-    );
-    style.text_styles.insert(
-        egui::TextStyle::Button,
-        FontId::new(13.0, FontFamily::Proportional),
-    );
-    style.text_styles.insert(
-        egui::TextStyle::Small,
-        FontId::new(11.5, FontFamily::Proportional),
-    );
-    style.text_styles.insert(
-        egui::TextStyle::Monospace,
-        FontId::new(12.5, FontFamily::Monospace),
-    );
+    style.text_styles.insert(egui::TextStyle::Heading, FontId::new(18.0, FontFamily::Proportional));
+    style.text_styles.insert(egui::TextStyle::Body, FontId::new(13.5, FontFamily::Proportional));
+    style.text_styles.insert(egui::TextStyle::Button, FontId::new(13.0, FontFamily::Proportional));
+    style.text_styles.insert(egui::TextStyle::Small, FontId::new(11.5, FontFamily::Proportional));
+    style.text_styles.insert(egui::TextStyle::Monospace, FontId::new(12.5, FontFamily::Monospace));
 
     ctx.set_theme(egui::ThemePreference::Dark);
     ctx.set_style_of(egui::Theme::Dark, style);

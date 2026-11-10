@@ -1,7 +1,8 @@
 //! Right sidebar: property inspector for the form and selected control.
 
 use crate::model::{
-    BorderStyle, ControlKind, FormDocument, FormTheme, Orientation, RgbaColor, StartPosition,
+    BorderStyle, ControlKind, FormDocument, FormTheme, HoverEffect, Orientation, RgbaColor,
+    StartPosition,
 };
 use crate::theme::{self, TEXT_MUTED};
 use egui::{Color32, ComboBox, RichText, Ui};
@@ -58,6 +59,13 @@ fn show_form_props(ui: &mut Ui, doc: &mut FormDocument) {
     ui.checkbox(&mut doc.maximize_box, "Maximize box");
     ui.checkbox(&mut doc.client_area_only, "Client area only")
         .on_hover_text("No title bar or window decorations — only the client area is shown");
+    if doc.client_area_only {
+        prop_row(ui, "Corner radius", |ui| {
+            ui.add(egui::DragValue::new(&mut doc.corner_radius).range(0..=64).speed(1));
+        });
+        ui.checkbox(&mut doc.custom_caption_buttons, "Custom window buttons")
+            .on_hover_text("Draw minimize / maximize / close buttons inside the form, replacing the default window buttons");
+    }
 
     prop_row(ui, "Theme", |ui| {
         ComboBox::from_id_salt("form_theme")
@@ -133,6 +141,17 @@ fn show_control_props(ui: &mut Ui, doc: &mut FormDocument) {
         ControlKind::PictureBox => edit_picturebox(ui, &mut doc.controls[idx]),
         ControlKind::Timer => edit_timer(ui, &mut doc.controls[idx]),
     }
+
+    // Per-control hover animation (applies to every kind, including Button).
+    prop_row(ui, "Hover effect", |ui| {
+        ComboBox::from_id_salt(("hover_effect", id))
+            .selected_text(doc.controls[idx].hover_effect.as_str())
+            .show_ui(ui, |ui| {
+                for &effect in HoverEffect::ALL {
+                    ui.selectable_value(&mut doc.controls[idx].hover_effect, effect, effect.as_str());
+                }
+            });
+    });
 
     ui.add_space(8.0);
     if ui.button("Delete").clicked() {

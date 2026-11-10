@@ -104,6 +104,51 @@ impl Default for RgbaColor {
     }
 }
 
+/// Hover animation shown in the designer canvas and the generated app.
+/// Per control: set it in Properties ("Hover effect").
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
+pub enum HoverEffect {
+    /// No hover animation (default for most controls).
+    #[default]
+    None,
+    /// Breathing outline that expands and contracts around the control.
+    Bubbly,
+    /// Soft layered halo in the control's back colour, fading in on hover.
+    Glow,
+    /// Sonar rings that expand outwards from the control and fade away.
+    Ripple,
+    /// Soft drop shadow that grows under the control, as if it lifts up.
+    Lift,
+}
+
+impl HoverEffect {
+    pub const ALL: &'static [HoverEffect] = &[
+        HoverEffect::None,
+        HoverEffect::Bubbly,
+        HoverEffect::Glow,
+        HoverEffect::Ripple,
+        HoverEffect::Lift,
+    ];
+
+    pub fn as_str(self) -> &'static str {
+        match self {
+            HoverEffect::None => "None",
+            HoverEffect::Bubbly => "Bubbly",
+            HoverEffect::Glow => "Glow",
+            HoverEffect::Ripple => "Ripple",
+            HoverEffect::Lift => "Lift",
+        }
+    }
+
+    /// Default when a control is dropped: Bubbly for Button/TextBox only.
+    pub fn default_for_kind(kind: ControlKind) -> Self {
+        match kind {
+            ControlKind::Button | ControlKind::TextBox => HoverEffect::Bubbly,
+            _ => HoverEffect::None,
+        }
+    }
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
 pub enum StartPosition {
     Manual,
@@ -269,6 +314,11 @@ pub struct Control {
     /// Timer: tick interval in milliseconds.
     #[serde(default = "default_timer_interval_ms")]
     pub interval_ms: u32,
+
+    /// Hover animation for this control only (None/Bubbly/Glow).
+    /// Old form JSON without this field loads as None.
+    #[serde(default)]
+    pub hover_effect: HoverEffect,
 }
 
 fn default_true() -> bool {
@@ -360,6 +410,7 @@ impl Control {
             password_char: None,
             image_path: String::new(),
             interval_ms: default_timer_interval_ms(),
+            hover_effect: HoverEffect::default_for_kind(kind),
         }
     }
 
@@ -521,6 +572,15 @@ pub struct FormDocument {
     #[serde(default)]
     pub client_area_only: bool,
 
+    /// Rounded corner radius (px) of the borderless (client-area-only) form.
+    #[serde(default)]
+    pub corner_radius: u8,
+
+    /// Draw custom minimize/maximize/close buttons inside the client area,
+    /// replacing the default window decorations (client-area-only forms).
+    #[serde(default)]
+    pub custom_caption_buttons: bool,
+
     pub controls: Vec<Control>,
     pub selected: Option<ControlId>,
 
@@ -563,6 +623,8 @@ impl Default for FormDocument {
             opacity: 1.0,
             theme: FormTheme::default(),
             client_area_only: false,
+            corner_radius: 0,
+            custom_caption_buttons: false,
             controls: Vec::new(),
             selected: None,
             grid_size: 8,
@@ -733,5 +795,28 @@ mod theme_tests {
         let old_doc = FormDocument::from_json(old).unwrap();
         assert_eq!(old_doc.theme, FormTheme::Corporate);
         assert!(!old_doc.client_area_only);
+    }
+}
+
+#[cfg(test)]
+mod hover_effect_tests {
+    use super::*;
+
+    #[test]
+    fn hover_effect_defaults_and_roundtrip() {
+        // Bubbly by default only for Button and TextBox.
+        assert_eq!(Control::new(1, ControlKind::Button, "B".into(), 0, 0).hover_effect, HoverEffect::Bubbly);
+        assert_eq!(Control::new(2, ControlKind::TextBox, "T".into(), 0, 0).hover_effect, HoverEffect::Bubbly);
+        for kind in [ControlKind::Label, ControlKind::Slider, ControlKind::DropDown, ControlKind::RadioBox, ControlKind::PictureBox, ControlKind::Timer] {
+            assert_eq!(Control::new(3, kind, "X".into(), 0, 0).hover_effect, HoverEffect::None, "{kind:?}");
+        }
+        // Per-control choice survives save/load, and old JSON (no field) loads as None.
+        let mut doc = FormDocument::new_blank();
+        doc.add_control(ControlKind::Slider, 10.0, 10.0);
+        doc.selected_control_mut().unwrap().hover_effect = HoverEffect::Glow;
+        let loaded = FormDocument::from_json(&doc.to_json().unwrap()).unwrap();
+        assert_eq!(loaded.controls[0].hover_effect, HoverEffect::Glow);
+        let old = FormDocument::from_json(r#"{"title":"F","width":320,"height":200,"controls":[{"id":1,"kind":"Button","name":"Button1","text":"OK","rect":{"x":1,"y":2,"width":80,"height":24}}],"selected":1,"next_id":2}"#).unwrap();
+        assert_eq!(old.controls[0].hover_effect, HoverEffect::None);
     }
 }
