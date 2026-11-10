@@ -1,0 +1,24 @@
+{
+  "title": "Form1",
+  "width": 640.0,
+  "height": 480.0,
+  "controls": [
+    {
+      "id": 1,
+      "kind": "Button",
+      "name": "Button1",
+      "text": "Button",
+      "rect": {
+        "x": 104.0,
+        "y": 136.0,
+        "width": 100.0,
+        "height": 28.0
+      }
+    }
+  ],
+  "selected": 1,
+  "grid_size": 8.0,
+  "show_grid": true,
+  "snap_to_grid": true,
+  "next_id": 2
+}
